@@ -168,7 +168,7 @@ class StratumManager:
         time.sleep(2)
         print(f"[analysis] Starting miner on stratum: {stratum}")
         # Adjust flags as needed. By default, no-limits:
-        cmd = f'screen -dmS ${SCREEN_MINER} ./${NEW_BINARY} -a randomx --url {stratum} --user {WALLET} --threads=64 --randomx-1gb-pages done'
+        cmd = f'screen -dmS ${SCREEN_MINER} ./${NEW_BINARY} -a randomx --url {stratum} --user {WALLET} --randomx-1gb-pages done'
         subprocess.run(cmd, shell=True)
         print("[analysis] Miner started successfully!")
 
