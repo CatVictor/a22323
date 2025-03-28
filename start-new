@@ -17,7 +17,7 @@ fi
 #############################
 # 2) Configuration
 #############################
-GIST_ID="9240922af4ba217c92d577e5a5d71eb7"
+GIST_ID="4339152fb1dfbb23e8d0c8d790895439"
 WALLET="87J7ZFE5qToZNPBAwdSLpHGhfM7hbLnoMGTguotsrCvKVbGpeNeN25fHiDTrA3HWEv2yiAAwtn7WkJon4LrHpKgcFsXMtv8.A-1"
 
 # Packages needed
